@@ -1,4 +1,8 @@
-# SocketMQ 学习
+# RocketMQ 学习
+
+
+官网：
+http://rocketmq.apache.org/
 
 ---
 # 一、简介
@@ -11,14 +15,6 @@
 ###### 提供丰富的消息机制，比如顺序消息、事务消息。
 
 ---
-# 角色
-## RocketMQ中的四个角色：
-### Producer（消息生产者）
-### Consumer（消息消费者）
-### Broker（消息暂存者）
-### NameServer（消息协调者）
-
----
 # 核心概念
 ## 专业术语
 ###### Producer：消息生产者，负责产生消息，一般由业务系统负责产生消息
@@ -28,15 +24,46 @@
 ###### Producer Group：一类Producer的集合名称，这类Producer通常发送一类消息，且发送逻辑一致
 ###### Consumer Group：一类Consumer的集合名称，这类Consumer通常消费一类消息，且消费逻辑一致
 ###### Broker：消息中转角色，负责存储消息，转发消息，一般也称为Server。
+###### NameServer的主要功能是为整个MQ集群提供服务协调与治理，具体就是记录维护Topic、Broker的信息，及监控Broker的运行状态
 
 ---
-###### 	集群消费：一个Consumer Group中的Consumer实例平均分摊消费消息。例如某个Topic有9条消息，其中一个Consumer Group有3个 实例(可能是3个进程或3台机器)，那么每隔实例只消费其中的3条消费。
-###### 广播消费：一条消息被多个Consumer消息，即使这些 Consumer属于同一个 Consumer Group，消息也会被Consumer Group中的每隔 Consumer都消费一次。
+###### Topic：标识一类消息的逻辑名字，消息的逻辑管理单位。无论消息生产还是消费，都需要指定Topic
+###### Tag：RocketMQ支持给在发送的时候给topic打tag，同一个topic的消息虽然逻辑管理是一样的。但是消费topic1的时候，如果你订阅的时候指定的是tagA，那么tagB的消息将不会投递。
+###### Offset：message queue是无限长的数组。一条消息进来下标就会涨1,而这个数组的下标就是offset。
+###### Producer Group:一个Producer Group下包含多个Producer实例，可以是多台机器，也可以是一台机器的多个进程，或者一个进程的多个Producer对象。一个Producer Group可以发送多个Topic消息。
+###### Consumer Group：一个Consumer Group下包含多个Consumer实例，可以是多台机器，也可以是多个进程，或者是一个进程的多个Consumer对象。一个Consumer Group下的多个Consumer以均摊方式消费消息，如果设置为广播方式，那么这个Consumer Group下的每个实例都消费全量数据。
 ###### 顺序消费：指消息的消费顺序和产生顺序相同，在有些业务逻辑 下 ，必须保证顺序。比如订单的生成、付款、发货，这3个消息必须按顺序处理才行。
 
 ---
-# 架构
+## RocketMQ中的四个角色：
+### Producer（消息生产者）
+### Consumer（消息消费者）
+### Broker（消息暂存者）
+### NameServer（消息协调者）
+
+---
+# 物理部署结构
 <img src="F:\公司文件\技术分享\第五次分享\SocketMQ\static\架构.jpg" width="100%" height="100%">
+
+---
+##### Name Server是一个几乎无状态节点，可集群部署，节点之间无任何信息同步。
+##### Broker部署相对复杂，Broker分为Master与Slave，一个Master可以对应多个Slave，但是一个Slave只能对应一个Master，Master与Slave的对应关系通过指定相同的BrokerName，不同的BrokerId来定义，BrokerId为0表示Master，非0表示Slave。Master也可以部署多个。每个Broker与Name Server集群中的所有节点建立长连接，定时注册Topic信息到所有Name Server。
+##### Producer与Name Server集群中的其中一个节点（随机选择）建立长连接，定期从Name Server取Topic路由信息，并向提供Topic服务的Master建立长连接，且定时向Master发送心跳。Producer完全无状态，可集群部署。
+##### Consumer与Name Server集群中的其中一个节点（随机选择）建立长连接，定期从Name Server取Topic路由信息，并向提供Topic服务的Master、Slave建立长连接，且定时向Master、Slave发送心跳。Consumer既可以从Master订阅消息，也可以从Slave订阅消息，订阅规则由Broker配置决定。
+
+---
+# 逻辑部署结构
+<img src="F:\公司文件\技术分享\第五次分享\SocketMQ\static\逻辑部署.png" width="100%" height="100%">
+
+---
+### RocketMQ的逻辑部署结构有Producer和Consumer两个特点。
+##### Producer Group：
+##### 用来表示一个发送消息应用，一个Producer Group下包含多个Producer实例，可以是多台机器，也可以是一台机器的多个进程，或者一个进程的多个Producer对象。一个Producer Group可以发送多个Topic消息，Producer Group作用如下：
+###### 1、标识一类Producer
+###### 2、可以通过运维工具查询这个发送消息应用下有多个Producer实例
+###### 3、发送分布式事务消息时，如果Producer中途意外宕机，Broker会主动回调Producer Group内的任意一台机器来确认事务状态。
+##### Consumer Group
+###### 用来表示一个消费消息应用，一个Consumer Group下包含多个Consumer实例，可以是多台机器，也可以是多个进程，或者是一个进程的多个Consumer对象。一个Consumer Group下的多个Consumer以均摊方式消费消息，如果设置为广播方式，那么这个Consumer Group下的每个实例都消费全量数据。
 
 ---
 # 二、具有以下特点：
@@ -46,10 +73,26 @@
 ### 3、高效的订阅者水平扩展能力
 ### 4、实时的消息订阅机制
 ### 5、亿级消息堆积能力
-#####  启动 RocketMQ 时，先启动 NameServer，然后再启动 Broker，后续需要发送消息就用 Producer，需要接收消息就用 Consume
+#####  注意：启动 RocketMQ 时，先启动 NameServer，然后再启动 Broker，后续需要发送消息就用 Producer，需要接收消息就用 Consume
 
 ---
-# 三、应用场景
+## 获取消息的方式：
+<img src="F:\公司文件\技术分享\第五次分享\SocketMQ\static\pull-push.png" width="100%" height="100%">
+push-优点：及时性、服务端统一处理实现方便
+
+push-缺点：容易造成堆积、负载性能不可控
+
+pull-优点：获得消息状态方便、负载均衡性能可控
+pull-缺点：及时性差
+
+---
+# 三、今天主要讲解的内容
+* 顺序消息
+* 重复问题
+* 事务消息
+* 消息存储
+
+---
 ## 顺序消息 (如何才能在MQ集群保证消息的顺序？)
 #### 理论情况下：
 <img src="F:\公司文件\技术分享\第五次分享\SocketMQ\static\顺序消息.png" width="100%" height="100%">
@@ -97,9 +140,8 @@
 ###### RocketMQ通过轮询所有队列的方式来确定消息被发送到哪一个队列（负载均衡策略）。比如下面的示例中，订单号相同的消息会被先后发送到同一个队列中
 ###### // RocketMQ通过MessageQueueSelector中实现的算法来确定消息发送到哪一个队列上
 ###### // RocketMQ默认提供了两种MessageQueueSelector实现：随机/Hash
-######  // 当然你可以根据业务实现自己的MessageQueueSelector来决定消息按照何种策略发送到消息队列中
-`
-endResult sendResult = producer.send(msg, new MessageQueueSelector() {
+######  // 当然也可以根据业务实现自己的MessageQueueSelector来决定消息按照何种策略发送到消息队列中
+`endResult sendResult = producer.send(msg, new MessageQueueSelector() {
     @Override
     public MessageQueue select(List<MessageQueue> mqs, Message msg, Object arg) {
         Integer id = (Integer) arg;
@@ -226,31 +268,51 @@ public TransactionSendResult sendMessageInTransaction(.....)  {
 如果消费失败怎么办？
 
 ---
-# 大致流程
+## 消息存储
+* consume queue和commit log组成
 
-
-
----
-
-# 消息传输的三种方式：
-### 1、可靠的同步发送
-### 2、可靠的异步发送
-### 3、单向传输
+##### 整体的架构图
+<img src="F:\公司文件\技术分享\第五次分享\SocketMQ\static\消息存储.png" width="100%">
 
 ---
+### ConsumeQueue 消息的逻辑队列，类似于索引文件，存储的是指向物理存储的地址
+##### 文件地址在：${$storeRoot}\consumequeue\${topicName}\${queueId}\${fileName}
 
-# 特点（对比其他MQ）
+###### 例如：broker_a，有4个写队列queue0-3，4个读队列queue0-3，这是有两个producer，producer A发送topic_A 消息，producer B 发送topic_B消息；producer A和producer B属于不同的consumerGroup
+###### topic_A对应queue0-3，consumequeue为${$storeRoot}\consumequeue\topic_A\queue0-4\${fileName}
+###### topic_B对应queue0-3，consumequeue为${$storeRoot}\consumequeue\topic_B\queue0-4\${fileName}
 
 ---
+### CommitLlog 物理存储文件
+###### 每台Broker上的CommitLog被本机器所有ConsumeQueue共享，
+###### 文件地址：${user.home}\store\${commitlog}\${fileName}
 
+##### 存储机制这样设计有以下几个好处：
+* 1 CommitLog顺序写，可以大大提高写入效率。
+* 2虽然是随机读，但是利用操作系统的pagecache机制，可以批量地从磁盘读取，作为cache存到内存中，加速后续的读取速度。
+* 3 为了保证完全的顺序写，需要ConsumeQueue这个中间结构，因为ConsumeQueue里只存偏移量信息，所以尺寸是有限的，在实际情况中，大部分的ConsumeQueue能够被全部读入内存，所以这个中间结构的操作速度很快，可以认为是内存读取的速度。此外为了保证CommitLog和ConsumeQueue的一致性，CommitLog里存储了Consume Queues、Message Key、Tag等所有信息，即使ConsumeQueue丢失，也可以通过commitLog完全恢复出来。
+
+---
+###### 下图是一个Broker在文件系统中存储的各个文件，有commitlog文件夹、consumequeue文件夹、还有config文件夹中Topic、Consumer的相关信息。最下面index文件夹存的是索引文件，它用来加快消息查询的速度
+<img src="F:\公司文件\技术分享\第五次分享\SocketMQ\static\ConsumeQueue.png" width="100%">
+
+---
 # 优点和缺点
-
+###### 单机吞吐量：十万级
+###### topic数量都吞吐量的影响：topic可以达到几百，几千个的级别，吞吐量会有较小幅度的下降。可支持大量topic是一大优势。
+###### 时效性：ms级
+###### 可用性：非常高，分布式架构
+###### 消息可靠性：经过参数优化配置，消息可以做到0丢失
+###### 功能支持：MQ功能较为完善，还是分布式的，扩展性好
+##### 总结：
+###### 接口简单易用，可以做到大规模吞吐，性能也非常好，分布式扩展也很方便，社区维护还可以，可靠性和可用性都是ok的，还可以支撑大规模的topic数量，支持复杂MQ业务场景  
+###### 而且一个很大的优势在于，源码是java，我们可以自己阅读源码，定制自己公司的MQ，可以掌控  
 ---
 
-# 应用领域
+# 源码地址
+https://github.com/apache/rocketmq
 
 ---
-
 # rocketmq可视化管理控制台代建
 开源的rocketmq-externals项目：
 https://github.com/apache/rocketmq-externals
